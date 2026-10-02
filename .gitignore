@@ -1,0 +1,9 @@
+claim.txt   
+datasets     
+faceforensics_download_v4.py  
+processed_data  
+real
+manipulated_log.txt           
+original_log.txt  
+process_*   
+__pycache__
