@@ -7,4 +7,10 @@ manipulated_log.txt
 original_log.txt  
 process_*   
 pretrain_faces
+*.pt
+*.log
+*.npz
+*.png
+*.jpg
+*.jpeg
 __pycache__
