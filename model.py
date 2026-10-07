@@ -1,4 +1,5 @@
 import math
+import os
 import timm
 import torch
 import torch.nn as nn
@@ -9,7 +10,6 @@ class LoRAExpert(nn.Module):
     def __init__(self, in_dim, out_dim, r=8):
         super().__init__()
         self.r = r
-        # B: down-projection (random, ~unit-norm columns), A: up-projection (zeros)
         self.B = nn.Parameter(torch.randn(in_dim, r) / math.sqrt(in_dim))
         self.A = nn.Parameter(torch.zeros(r, out_dim))
 
@@ -22,29 +22,28 @@ class DevelopmentalMoE(nn.Module):
         super().__init__()
         self.original_ffn = original_ffn
         self.tau, self.delta = tau, delta
+        self.r = r
 
-        # expert 0 = Real-LoRA, expert 1 = Fake-LoRA for task 1
         self.experts = nn.ModuleList([LoRAExpert(in_dim, out_dim, r),
                                       LoRAExpert(in_dim, out_dim, r)])
         self.router = nn.Linear(in_dim, 2, bias=False)
         nn.init.zeros_(self.router.weight)
 
-        self.cur_labels = None   # set by DevFDViT.forward
+        self.cur_labels = None
         self.llb = None
         self.inp = None
 
-    def add_expert(self, in_dim, out_dim, r=8):
+    def add_expert(self, in_dim, out_dim, r=None):
+        r = r or self.r
         dev = self.router.weight.device
         new_exp = LoRAExpert(in_dim, out_dim, r).to(dev)
 
-        # start the new B orthogonal to all old Fake-LoRA B's
         with torch.no_grad():
             prev = torch.cat([e.B for e in self.experts[1:]], dim=1)
             Q, _ = torch.linalg.qr(prev)
             new_exp.B -= Q @ (Q.T @ new_exp.B)
         self.experts.append(new_exp)
 
-        # expand router, keep old rows
         new_router = nn.Linear(in_dim, len(self.experts), bias=False).to(dev)
         with torch.no_grad():
             new_router.weight.zero_()
@@ -53,21 +52,20 @@ class DevelopmentalMoE(nn.Module):
 
     def forward(self, x):
         base_out = self.original_ffn(x)
-        expert_outputs = torch.stack([e(x) for e in self.experts], dim=0)   # [E,B,S,D]
-        I = F.softmax(self.router(x) / self.tau, dim=-1)                    # [B,S,E]
+        expert_outputs = torch.stack([e(x) for e in self.experts], dim=0)
+        I = F.softmax(self.router(x) / self.tau, dim=-1)
         moe_out = torch.einsum('bse,ebsd->bsd', I, expert_outputs)
 
-        # Label-guided localized balancing loss (per-sample response)
         self.llb = torch.zeros((), device=x.device)
         labels = self.cur_labels
         if labels is not None:
             E = len(self.experts)
-            is_fake = (labels == 0)                                  # fake=0, real=1
+            is_fake = (labels == 0)
             match = torch.zeros(labels.size(0), E, device=x.device)
-            match[:, 0] = (~is_fake).float()                         # Real-LoRA <-> real
-            match[:, 1:] = is_fake.float().unsqueeze(1)              # Fake-LoRAs <-> fake
-            C = 1 + self.delta - 2 * self.delta * match              # 1-δ match, 1+δ mismatch
-            W = I.mean(dim=1) * C                                    # [B,E]
+            match[:, 0] = (~is_fake).float()
+            match[:, 1:] = is_fake.float().unsqueeze(1)
+            C = 1 + self.delta - 2 * self.delta * match
+            W = I.mean(dim=1) * C
             self.llb = torch.var(W) / (torch.mean(W) + 1e-8)
 
         self.inp = x.detach()
@@ -75,31 +73,43 @@ class DevelopmentalMoE(nn.Module):
 
 
 class DevFDViT(nn.Module):
-    def __init__(self):
+    def __init__(self, rank=8, sbi_ckpt='clip_sbi.pt'):
         super().__init__()
-        # CLIP ViT-B/16 as in the paper (pooled 768-d output with num_classes=0)
+        self.rank = rank
         self.vit = timm.create_model('vit_base_patch16_clip_224.openai',
                                      pretrained=True, num_classes=0)
+
+        ckpt = None
+        if sbi_ckpt and os.path.exists(sbi_ckpt):
+            ckpt = torch.load(sbi_ckpt, map_location='cpu')
+            self.vit.load_state_dict(ckpt['vit'])
+            print(f"Loaded SBI-pretrained backbone from {sbi_ckpt}")
+
         for p in self.vit.parameters():
             p.requires_grad = False
 
         self.hidden_dim = 768
         self.moe_layers = nn.ModuleList()
         for block in self.vit.blocks:
-            moe = DevelopmentalMoE(block.mlp, self.hidden_dim, self.hidden_dim)
+            moe = DevelopmentalMoE(block.mlp, self.hidden_dim, self.hidden_dim, r=rank)
             block.mlp = moe
             self.moe_layers.append(moe)
 
         self.head = nn.Linear(self.hidden_dim, 1)
+        if ckpt is not None:
+            self.head.load_state_dict(ckpt['head'])
 
-    def add_task(self):
+    def add_task(self, freeze_real=False):
         for moe in self.moe_layers:
-            for e in moe.experts[1:]:      # freeze old Fake-LoRAs, keep Real-LoRA trainable
+            if freeze_real:
+                for p in moe.experts[0].parameters():
+                    p.requires_grad = False
+            for e in moe.experts[1:]:
                 for p in e.parameters():
                     p.requires_grad = False
-            moe.add_expert(self.hidden_dim, self.hidden_dim)
+            moe.add_expert(self.hidden_dim, self.hidden_dim, self.rank)
 
-    def freeze_old_router_rows(self):      # call after backward(), before optimizer.step()
+    def freeze_old_router_rows(self):
         for moe in self.moe_layers:
             g = moe.router.weight.grad
             if g is not None:
@@ -108,7 +118,7 @@ class DevFDViT(nn.Module):
     def forward(self, x, labels=None):
         for m in self.moe_layers:
             m.cur_labels = labels
-        feats = self.vit(x)                                        # [B,768]
+        feats = self.vit(x)
         probs = torch.sigmoid(self.head(feats)).squeeze(-1)
         total_llb = sum(m.llb for m in self.moe_layers)
         moe_inputs = [m.inp for m in self.moe_layers]

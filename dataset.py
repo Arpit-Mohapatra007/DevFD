@@ -18,7 +18,7 @@ class BalancedBatchSampler(torch.utils.data.Sampler):
             s, e = b * self.half, (b + 1) * self.half
             yield np.random.permutation(np.concatenate([f[s:e], r[s:e]])).tolist()
 
-def get_dataloaders(task_path, batch_size=32, train_ratio=0.8):
+def get_dataloaders(task_path, batch_size=32, train_ratio=0.8, holdout=False):
     transform = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
@@ -46,6 +46,11 @@ def get_dataloaders(task_path, batch_size=32, train_ratio=0.8):
     # Construct the perfectly balanced Train and Test index lists
     train_indices = np.concatenate([fake_indices[:fake_train_size], real_indices[:real_train_size]])
     test_indices = np.concatenate([fake_indices[fake_train_size:], real_indices[real_train_size:]])
+
+    if holdout:   # for hyperparameter search: carve a validation set out of TRAIN
+        tr = np.random.RandomState(0).permutation(train_indices)
+        cut = int(0.8 * len(tr))
+        train_indices, test_indices = tr[:cut], tr[cut:]
     
     # Create the PyTorch Subsets
     train_dataset = Subset(dataset, train_indices)
