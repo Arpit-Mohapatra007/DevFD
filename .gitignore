@@ -6,4 +6,5 @@ real
 manipulated_log.txt           
 original_log.txt  
 process_*   
+pretrain_faces
 __pycache__
