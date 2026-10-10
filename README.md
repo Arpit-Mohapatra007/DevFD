@@ -40,7 +40,7 @@
 
 ## 2. Core Idea Behind DevFD
 
-![DevFD architecture](assets/devfd_architecture.png)
+![DevFD architecture](assets/devfd_architecture.jpeg)
 
 ### 2.1 The overall network (left of the figure)
 
@@ -105,7 +105,7 @@ The rule makes the new helper learn in a direction that does **not** cross the o
 - Using the formulas from the paper, we added DevFD's core capability: **remember old weights** (to detect older forgeries) while **learning new weights** (to detect new forgeries).
 - We trained on our structured dataset.
 
-![LoRA forward formula](assets/formula_lora_forward.png)
+![LoRA forward formula](assets/formula_lora_forward.jpeg)
 
 | Symbol | Meaning |
 | --- | --- |
@@ -119,7 +119,7 @@ The rule makes the new helper learn in a direction that does **not** cross the o
 
 We used the hyperparameters given in the paper. The objective loss that is minimised:
 
-![Total loss](assets/formula_total_loss.png)
+![Total loss](assets/formula_total_loss.jpeg)
 
 | Term | Meaning |
 | --- | --- |
@@ -130,7 +130,7 @@ We used the hyperparameters given in the paper. The objective loss that is minim
 
 Next, we wanted to reduce the **forgetting factor** as much as possible, so the model keeps old detection skills while learning new ones.
 
-![Average forgetting](assets/formula_average_forgetting.png)
+![Average forgetting](assets/formula_average_forgetting.jpeg)
 
 | Symbol | Meaning |
 | --- | --- |
