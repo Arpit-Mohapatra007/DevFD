@@ -210,7 +210,7 @@ The paper first pre-trains the backbone on real faces using the **self-blended i
 - **8000** crops used; face landmarks found for **7973 / 8000 (99.7 %)**.
 - **10 epochs**, learning rate **1e-5**. Accuracy rose from **93.6 % to 99.2 %**.
 
-![SBI pre-training samples – real face crops (top row) and their self-blended versions (bottom row)](assets/sbi_pretraining.png)
+![SBI pre-training samples – real face crops (top row) and their self-blended versions (bottom row)](assets/sbi_pretraining.jpeg)
 
 *Top row: real face crops. Bottom row: the same faces after self-blending.*
 
